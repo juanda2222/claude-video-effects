@@ -2076,6 +2076,17 @@ def probe(path):
     return (fr if fps <= 30.5 else '30'), min(fps, 30.0), float(j['format']['duration']), w, h
 
 
+def color_args(path):
+    """Encoder args that keep the source's colour primaries and transfer (e.g. iPhone Display P3), so players don't show it duller."""
+    s = json.loads(subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=color_primaries,color_transfer',
+                                   '-of', 'json', path], capture_output=True, text=True).stdout or '{}').get('streams', [{}])[0]
+    ok = lambda v: v if v and v not in ('unknown', 'reserved', 'unspecified') else 'bt709'
+    # Frames come out of the decoder as RGB in the source's primaries/transfer; convert with an explicit BT.709 matrix and tag to match.
+    prim, trc = ok(s.get('color_primaries')), ok(s.get('color_transfer'))
+    return ['-vf', f'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p,setparams=color_primaries={prim}:color_trc={trc}:colorspace=bt709:range=tv',
+            '-colorspace', 'bt709', '-color_range', 'tv', '-color_primaries', prim, '-color_trc', trc]
+
+
 def read_frames(path, W, H, fr):
     p = subprocess.Popen(['ffmpeg', '-v', 'error', '-i', path, '-vf', f'fps={fr},scale={W}:{H}:flags=bicubic,format=rgb24', '-f', 'rawvideo', '-'],
                          stdout=subprocess.PIPE, bufsize=10 ** 8)
@@ -2213,7 +2224,7 @@ def main():
     enc = None
     if not stills:
         enc = subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', f'{W}x{H}', '-r', str(fr), '-i', '-',
-                                '-i', src, '-map', '0:v', '-map', '1:a:0?', '-c:v', 'libx264', '-crf', '17', '-preset', 'medium', '-pix_fmt', 'yuv420p',
+                                '-i', src, '-map', '0:v', '-map', '1:a:0?', '-c:v', 'libx264', '-crf', '17', '-preset', 'medium', *color_args(src), '-pix_fmt', 'yuv420p',
                                 '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', dst], stdin=subprocess.PIPE)
     print('Pass 2: adding the effects...', flush=True)
     sc = W / aw; total = int(dur * fps)
